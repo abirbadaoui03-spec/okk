@@ -7,14 +7,15 @@ const info   = document.getElementById('info');
 
 // ===================================================
 // 2. On crée l'objet "Hands" de MediaPipe.
-//    Il sait analyser une image et trouver les mains.
 // ===================================================
 const hands = new Hands({
   locateFile: (file) =>
-    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}
 });
 
-// Options : 1 seule main, qualité moyenne
+// ===================================================
+// 3. Configuration MediaPipe
+// ===================================================
 hands.setOptions({
   maxNumHands: 1,
   modelComplexity: 1,
@@ -22,12 +23,11 @@ hands.setOptions({
   minTrackingConfidence: 0.5
 });
 
-// À chaque image analysée, MediaPipe appelle "onResults"
+// À chaque image analysée
 hands.onResults(onResults);
 
 // ===================================================
-// 3. On allume la webcam et on envoie chaque frame
-//    à MediaPipe pour analyse.
+// 4. Activation de la webcam
 // ===================================================
 const camera = new Camera(video, {
   onFrame: async () => {
@@ -36,20 +36,11 @@ const camera = new Camera(video, {
   width: 640,
   height: 480
 });
+
 camera.start();
 
 // ===================================================
-// 4. Détecter si la main est ouverte
-//
-// MediaPipe renvoie 21 points (landmarks) par main.
-//   - 0  = poignet
-//   - 8  = bout de l'index       | 6  = articulation
-//   - 12 = bout du majeur        | 10 = articulation
-//   - 16 = bout de l'annulaire   | 14 = articulation
-//   - 20 = bout de l'auriculaire | 18 = articulation
-//
-// Astuce : si le bout du doigt est plus LOIN du poignet
-// que son articulation, c'est que le doigt est tendu.
+// 5. Fonction distance entre deux points
 // ===================================================
 function distance(a, b) {
   const dx = a.x - b.x;
@@ -57,81 +48,171 @@ function distance(a, b) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+// ===================================================
+// 6. Détection main ouverte
+// ===================================================
 function isHandOpen(landmarks) {
+
   const wrist = landmarks[0];
-  const tips  = [8, 12, 16, 20];
-  const pips  = [6, 10, 14, 18];
+
+  const tips = [8, 12, 16, 20];
+  const pips = [6, 10, 14, 18];
+
   let extended = 0;
+
   for (let i = 0; i < tips.length; i++) {
-    if (distance(landmarks[tips[i]], wrist) >
-        distance(landmarks[pips[i]], wrist)) {
+
+    if (
+      distance(landmarks[tips[i]], wrist) >
+      distance(landmarks[pips[i]], wrist)
+    ) {
       extended++;
     }
   }
-  return extended >= 3; // main ouverte = au moins 3 doigts tendus
+
+  return extended >= 3;
 }
 
-// Geste de scroll : POUCE + INDEX repliés
-//   - index plié : bout (8) plus proche du poignet que l'articulation (6)
-//   - pouce plié : bout (4) proche de la base de l'index (5),
-//     normalisé par la taille de la paume (distance 0 → 5)
+// ===================================================
+// 7. Détection pouce + index fermés
+// ===================================================
 function isThumbAndIndexClosed(landmarks) {
+
   const wrist = landmarks[0];
 
+  // index plié
   const indexFolded =
-    distance(landmarks[8], wrist) < distance(landmarks[6], wrist);
+    distance(landmarks[8], wrist) <
+    distance(landmarks[6], wrist);
 
-  const palmSize    = distance(landmarks[0], landmarks[5]);
-  const thumbFolded = distance(landmarks[4], landmarks[5]) < palmSize * 0.6;
+  // taille paume
+  const palmSize =
+    distance(landmarks[0], landmarks[5]);
+
+  // pouce plié
+  const thumbFolded =
+    distance(landmarks[4], landmarks[5]) <
+    palmSize * 0.6;
 
   return indexFolded && thumbFolded;
 }
 
 // ===================================================
-// 5. Réagir aux résultats : on modifie le CSS
-//    et on fait défiler la page.
+// 8. Détection du geste 👍
+// ===================================================
+function isThumbUp(landmarks) {
+
+  // Pouce vers le haut
+  const thumbUp =
+    landmarks[4].y < landmarks[3].y;
+
+  // Autres doigts repliés
+  const fingersFolded =
+    landmarks[8].y  > landmarks[6].y &&
+    landmarks[12].y > landmarks[10].y &&
+    landmarks[16].y > landmarks[14].y &&
+    landmarks[20].y > landmarks[18].y;
+
+  return thumbUp && fingersFolded;
+}
+
+// ===================================================
+// 9. Gestion des résultats MediaPipe
 // ===================================================
 function onResults(results) {
+
+  // ===============================================
   // Aucune main détectée
-  if (!results.multiHandLandmarks ||
-      results.multiHandLandmarks.length === 0) {
+  // ===============================================
+  if (
+    !results.multiHandLandmarks ||
+    results.multiHandLandmarks.length === 0
+  ) {
     status.textContent = '🙈 Aucune main';
     return;
   }
 
   const landmarks = results.multiHandLandmarks[0];
 
-  // ✋ Main ouverte → on AFFICHE la boîte info
-  // ✊ Sinon       → on la CACHE
+  // ===============================================
+  // 👍 Pouce levé → fermer le navigateur
+  // ===============================================
+  if (isThumbUp(landmarks)) {
+
+    status.textContent = '👍 Fermeture du navigateur...';
+
+    // tentative fermeture
+    window.open('', '_self');
+    window.close();
+
+    return;
+  }
+
+  // ===============================================
+  // ✋ Main ouverte → afficher info
+  // ===============================================
   if (isHandOpen(landmarks)) {
+
     info.style.display = 'flex';
+
   } else {
+
     info.style.display = 'none';
   }
 
-  // 🤏 Si POUCE + INDEX sont fermés → on fait défiler la page
-  //    selon la position verticale du poignet.
-  //
-  // landmarks[0].y = position verticale du poignet,
-  //   entre 0 (haut de la webcam) et 1 (bas).
-  //
-  //  - main en HAUT de l'image  → scroll vers le HAUT
-  //  - main en BAS de l'image   → scroll vers le BAS
-  //  - main au milieu           → zone morte (pas de scroll)
+  // ===============================================
+  // 🤏 Scroll avec pouce + index fermés
+  // ===============================================
   if (isThumbAndIndexClosed(landmarks)) {
+
     const y = landmarks[0].y;
+
+    // main en haut
     if (y < 0.4) {
+
       status.textContent = '🤏⬆️ Scroll haut';
-      window.scrollBy({ top: -20, behavior: 'auto' });
-    } else if (y > 0.6) {
-      status.textContent = '🤏⬇️ Scroll bas';
-      window.scrollBy({ top: 20, behavior: 'auto' });
-    } else {
-      status.textContent = '🤏 Pouce + index fermés (zone morte)';
+
+      window.scrollBy({
+        top: -20,
+        behavior: 'auto'
+      });
+
     }
-  } else if (isHandOpen(landmarks)) {
+
+    // main en bas
+    else if (y > 0.6) {
+
+      status.textContent = '🤏⬇️ Scroll bas';
+
+      window.scrollBy({
+        top: 20,
+        behavior: 'auto'
+      });
+
+    }
+
+    // zone morte
+    else {
+
+      status.textContent =
+        '🤏 Pouce + index fermés (zone morte)';
+    }
+
+  }
+
+  // ===============================================
+  // ✋ Main ouverte
+  // ===============================================
+  else if (isHandOpen(landmarks)) {
+
     status.textContent = '✋ Main ouverte';
-  } else {
+  }
+
+  // ===============================================
+  // ✊ Main fermée
+  // ===============================================
+  else {
+
     status.textContent = '✊ Main fermée';
   }
 }
